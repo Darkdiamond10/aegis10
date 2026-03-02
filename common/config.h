@@ -75,7 +75,8 @@
 
 /* ── Anti-Analysis Thresholds ────────────────────────────────────────────── */
 
-/* Granular Control Flags (Comment out to disable individual checks) */        \
+/* Granular Control Flags (Omitted if AEGIS_DEBUG is defined) */
+#ifndef AEGIS_DEBUG
 #define AEGIS_AA_ENABLE_PTRACE
 #define AEGIS_AA_ENABLE_TRACER_PID
 #define AEGIS_AA_ENABLE_RDTSC
@@ -88,6 +89,7 @@
 #define AEGIS_AA_ENABLE_BREAKPOINTS
 #define AEGIS_AA_ENABLE_UPTIME
 #define AEGIS_AA_ENABLE_LD_PRELOAD
+#endif
 
 #define AEGIS_AA_RDTSC_THRESHOLD 1000000 /* CPU cycles — timing gap  */
 #define AEGIS_AA_SLEEP_CHECK_MS 100      /* Sleep duration for check */

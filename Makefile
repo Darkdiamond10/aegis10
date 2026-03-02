@@ -31,7 +31,11 @@ PIC_FLAGS := -fPIC
 
 # Build mode: debug or release
 MODE     ?= release
+DEBUG    ?= 0
+
 ifeq ($(MODE),debug)
+    CFLAGS += -O0 -g -DAEIGIS_DEBUG
+else ifneq ($(DEBUG),0)
     CFLAGS += -O0 -g -DAEIGIS_DEBUG
 else
     CFLAGS += -O2
