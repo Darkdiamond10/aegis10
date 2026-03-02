@@ -104,4 +104,20 @@ class AegisCrypto:
 
         return payload
 
+    def to_dict(self):
+        """Export state for persistence."""
+        return {
+            "session_key": base64.b64encode(self.session_key).decode(),
+            "hkdf_salt": base64.b64encode(self.hkdf_salt).decode(),
+            "msg_counter": self.msg_counter,
+            "total_messages": self.total_messages
+        }
+
+    def from_dict(self, data):
+        """Import state from persistence."""
+        self.session_key = base64.b64decode(data["session_key"])
+        self.hkdf_salt = base64.b64decode(data["hkdf_salt"])
+        self.msg_counter = data["msg_counter"]
+        self.total_messages = data["total_messages"]
+
 SERVER_CRYPTO = AegisCrypto()
