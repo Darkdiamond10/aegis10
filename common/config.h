@@ -19,9 +19,9 @@
 
 /* ── C2 Configuration ────────────────────────────────────────────────────── */
 
-#define AEGIS_C2_PRIMARY_HOST "47.89.245.3"
+#define AEGIS_C2_PRIMARY_HOST "127.0.0.1"
 #define AEGIS_C2_PRIMARY_PORT 4443
-#define AEGIS_C2_FALLBACK_HOST "static.content-delivery-net.com"
+#define AEGIS_C2_FALLBACK_HOST "127.0.0.1"
 #define AEGIS_C2_FALLBACK_PORT 443
 #define AEGIS_C2_DOH_RESOLVER "https://dns.cloudflare.com/dns-query"
 #define AEGIS_C2_DOH_FALLBACK "https://dns.google/dns-query"
