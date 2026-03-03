@@ -81,7 +81,7 @@ static bool is_in_list(const char *name, const char *csv_list) {
 /* ── Debugger Detection: ptrace ──────────────────────────────────────────── */
 
 aegis_result_t aegis_aa_check_ptrace(void) {
-  #ifdef AEGIS_DISABLE_AA
+  #if defined(AEGIS_DISABLE_AA) || defined(DEBUG)
     return AEGIS_OK;
   #endif
   #ifndef AEGIS_AA_ENABLE_PTRACE
@@ -118,7 +118,7 @@ aegis_result_t aegis_aa_check_ptrace(void) {
 /* ── Debugger Detection: TracerPid ───────────────────────────────────────── */
 
 aegis_result_t aegis_aa_check_tracer_pid(void) {
-  #ifdef AEGIS_DISABLE_AA
+  #if defined(AEGIS_DISABLE_AA) || defined(DEBUG)
     return AEGIS_OK;
   #endif
   #ifndef AEGIS_AA_ENABLE_TRACER_PID
@@ -142,7 +142,7 @@ aegis_result_t aegis_aa_check_tracer_pid(void) {
 /* ── Timing: RDTSC Gap ───────────────────────────────────────────────────── */
 
 aegis_result_t aegis_aa_check_rdtsc_timing(void) {
-  #ifdef AEGIS_DISABLE_AA
+  #if defined(AEGIS_DISABLE_AA) || defined(DEBUG)
     return AEGIS_OK;
   #endif
   #ifndef AEGIS_AA_ENABLE_RDTSC
@@ -172,7 +172,7 @@ aegis_result_t aegis_aa_check_rdtsc_timing(void) {
 /* ── Timing: Sleep Acceleration ──────────────────────────────────────────── */
 
 aegis_result_t aegis_aa_check_sleep_timing(void) {
-  #ifdef AEGIS_DISABLE_AA
+  #if defined(AEGIS_DISABLE_AA) || defined(DEBUG)
     return AEGIS_OK;
   #endif
   #ifndef AEGIS_AA_ENABLE_SLEEP_TIMING
@@ -211,7 +211,7 @@ aegis_result_t aegis_aa_check_sleep_timing(void) {
 /* ── Hostile Process Scanning ────────────────────────────────────────────── */
 
 aegis_result_t aegis_aa_check_hostile_procs(void) {
-  #ifdef AEGIS_DISABLE_AA
+  #if defined(AEGIS_DISABLE_AA) || defined(DEBUG)
     return AEGIS_OK;
   #endif
   #ifndef AEGIS_AA_ENABLE_HOSTILE_PROCS
@@ -253,7 +253,7 @@ aegis_result_t aegis_aa_check_hostile_procs(void) {
 /* ── VM Detection: CPUID ─────────────────────────────────────────────────── */
 
 aegis_result_t aegis_aa_check_vm(void) {
-  #ifdef AEGIS_DISABLE_AA
+  #if defined(AEGIS_DISABLE_AA) || defined(DEBUG)
     return AEGIS_OK;
   #endif
   #ifndef AEGIS_AA_ENABLE_VM_CPUID
@@ -316,7 +316,7 @@ aegis_result_t aegis_aa_check_vm(void) {
 /* ── VM Detection: MAC Address OUI ───────────────────────────────────────── */
 
 aegis_result_t aegis_aa_check_vm_mac(void) {
-  #ifdef AEGIS_DISABLE_AA
+  #if defined(AEGIS_DISABLE_AA) || defined(DEBUG)
     return AEGIS_OK;
   #endif
   #ifndef AEGIS_AA_ENABLE_VM_MAC
@@ -358,7 +358,7 @@ aegis_result_t aegis_aa_check_vm_mac(void) {
 /* ── Sandbox: Resource Check ─────────────────────────────────────────────── */
 
 aegis_result_t aegis_aa_check_sandbox_resources(void) {
-  #ifdef AEGIS_DISABLE_AA
+  #if defined(AEGIS_DISABLE_AA) || defined(DEBUG)
     return AEGIS_OK;
   #endif
   #ifndef AEGIS_AA_ENABLE_SANDBOX_RESOURCES
@@ -398,7 +398,7 @@ aegis_result_t aegis_aa_check_sandbox_resources(void) {
 /* ── Container Detection ─────────────────────────────────────────────────── */
 
 aegis_result_t aegis_aa_check_container(void) {
-  #ifdef AEGIS_DISABLE_AA
+  #if defined(AEGIS_DISABLE_AA) || defined(DEBUG)
     return AEGIS_OK;
   #endif
   #ifndef AEGIS_AA_ENABLE_CONTAINER
@@ -427,7 +427,7 @@ aegis_result_t aegis_aa_check_container(void) {
 /* ── Breakpoint Detection ────────────────────────────────────────────────── */
 
 aegis_result_t aegis_aa_check_breakpoints(void *code_start, size_t code_len) {
-  #ifdef AEGIS_DISABLE_AA
+  #if defined(AEGIS_DISABLE_AA) || defined(DEBUG)
     return AEGIS_OK;
   #endif
   #ifndef AEGIS_AA_ENABLE_BREAKPOINTS
@@ -461,7 +461,7 @@ aegis_result_t aegis_aa_check_breakpoints(void *code_start, size_t code_len) {
 /* ── System Uptime ───────────────────────────────────────────────────────── */
 
 aegis_result_t aegis_aa_check_uptime(void) {
-  #ifdef AEGIS_DISABLE_AA
+  #if defined(AEGIS_DISABLE_AA) || defined(DEBUG)
     return AEGIS_OK;
   #endif
   #ifndef AEGIS_AA_ENABLE_UPTIME
@@ -481,7 +481,7 @@ aegis_result_t aegis_aa_check_uptime(void) {
 /* ── LD_PRELOAD Detection ────────────────────────────────────────────────── */
 
 aegis_result_t aegis_aa_check_ld_preload(void) {
-  #ifdef AEGIS_DISABLE_AA
+  #if defined(AEGIS_DISABLE_AA) || defined(DEBUG)
     return AEGIS_OK;
   #endif
   #ifndef AEGIS_AA_ENABLE_LD_PRELOAD
@@ -523,7 +523,7 @@ aegis_result_t aegis_aa_full_check(void) {
    * Short-circuit on first failure.
    */
 
-  #ifdef AEGIS_DISABLE_AA
+  #if defined(AEGIS_DISABLE_AA) || defined(DEBUG)
     return AEGIS_OK;
   #endif
 
