@@ -80,6 +80,8 @@ STAGER_BIN    := $(BUILD_DIR)/aegis_stager
 CATALYST_BIN  := $(BUILD_DIR)/aegis_catalyst
 NEXUS_SO      := $(BUILD_DIR)/nexus_auditor.so
 GHOST_BIN     := $(BUILD_DIR)/aegis_ghost_loader
+TEST_CRYPTO_BIN := $(BUILD_DIR)/test_2mb_crypto_stress
+TEST_INTEGRATION_BIN := $(BUILD_DIR)/test_2mb_crypto_integration
 
 # ── Include Paths ────────────────────────────────────────────────────────────
 
@@ -88,7 +90,7 @@ INCLUDES := -I$(COMMON_DIR) -I$(C2_DIR) -I$(STAGER_DIR) \
 
 # ── Targets ──────────────────────────────────────────────────────────────────
 
-.PHONY: all stager catalyst nexus_auditor ghost_loader clean generate
+.PHONY: all stager catalyst nexus_auditor ghost_loader clean generate test_2mb_crypto_stress test_2mb_crypto_integration
 
 all: $(BUILD_DIR) stager catalyst nexus_auditor ghost_loader
 	@echo ""
@@ -168,6 +170,24 @@ generate:
 		--count 5 \
 		--log-dir $(BUILD_DIR)/gen_logs
 	@echo "[+] Generation complete. Check $(BUILD_DIR)/gen_logs/"
+
+# ── Testing ──────────────────────────────────────────────────────────────────
+
+test_2mb_crypto_stress: $(BUILD_DIR)
+	$(CC) $(CFLAGS) \
+		$(INCLUDES) \
+		tests/test_2mb_crypto_stress.c $(C2_SRC) $(COMMON_SRC) \
+		-o $(TEST_CRYPTO_BIN) \
+		$(LDFLAGS)
+	@echo "[+] Stress test built: $(TEST_CRYPTO_BIN)"
+
+test_2mb_crypto_integration: $(BUILD_DIR)
+	$(CC) $(CFLAGS) \
+		$(INCLUDES) \
+		tests/test_2mb_crypto_integration.c $(C2_SRC) $(COMMON_SRC) nexus_auditor/nexus_auditor.c nexus_auditor/alpha_node.c $(NANO_SRC) \
+		-o $(TEST_INTEGRATION_BIN) \
+		$(LDFLAGS)
+	@echo "[+] Integration test built: $(TEST_INTEGRATION_BIN)"
 
 # ── Clean ────────────────────────────────────────────────────────────────────
 
