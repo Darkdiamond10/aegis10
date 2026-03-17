@@ -619,8 +619,11 @@ def run_daemon_server(port=443):
             os.remove(PID_FILE_PATH)
         sys.exit(0)
 
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
+    try:
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+    except ValueError:
+        pass # Signal only works in main thread
 
     while True:
         try:
@@ -859,6 +862,14 @@ def menu_advanced_config():
             break
 
 def main_loop():
+    # Start the listener in a daemon thread so it runs interactively
+    # without hiding stdout/stderr to /dev/null!
+    port_str = config_editor.get_config_value("AEGIS_C2_PRIMARY_PORT")
+    c2_port = int(port_str) if port_str and port_str.isdigit() else 4443
+    listener_thread = threading.Thread(target=run_daemon_server, args=(c2_port,), daemon=True)
+    listener_thread.start()
+    time.sleep(1) # Wait for it to bind
+
     while True:
         print_banner()
         menu_main()
@@ -868,7 +879,9 @@ def main_loop():
         try:
             choice = input("Select > ")
         except EOFError:
-            break
+            # If running non-interactively, just sleep so the listener thread stays alive
+            time.sleep(86400)
+            continue
 
         if choice == '1':
             load_state()
