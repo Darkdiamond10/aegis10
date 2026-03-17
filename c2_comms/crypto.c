@@ -356,6 +356,63 @@ cleanup:
   return result;
 }
 
+aegis_result_t aegis_decrypt_no_advance(aegis_crypto_ctx_t *ctx,
+                                         const uint8_t *ciphertext,
+                                         size_t ct_len, const uint8_t *aad,
+                                         size_t aad_len,
+                                         const uint8_t iv[AEGIS_GCM_IV_BYTES],
+                                         const uint8_t tag[AEGIS_GCM_TAG_BYTES],
+                                         uint8_t *plaintext) {
+  if (!ctx || !ciphertext || !iv || !tag || !plaintext)
+    return AEGIS_ERR_CRYPTO;
+
+  EVP_CIPHER_CTX *evp = EVP_CIPHER_CTX_new();
+  if (!evp)
+    return AEGIS_ERR_CRYPTO;
+
+  aegis_result_t result = AEGIS_ERR_CRYPTO;
+  int outlen = 0;
+
+  if (EVP_DecryptInit_ex(evp, EVP_aes_256_gcm(), NULL, NULL, NULL) != 1)
+    goto cleanup;
+
+  if (EVP_CIPHER_CTX_ctrl(evp, EVP_CTRL_GCM_SET_IVLEN, AEGIS_GCM_IV_BYTES,
+                          NULL) != 1)
+    goto cleanup;
+
+  if (EVP_DecryptInit_ex(evp, NULL, NULL, ctx->session_key, iv) != 1)
+    goto cleanup;
+
+  /* Process AAD */
+  if (aad && aad_len > 0) {
+    if (EVP_DecryptUpdate(evp, NULL, &outlen, aad, (int)aad_len) != 1)
+      goto cleanup;
+  }
+
+  /* Decrypt */
+  if (EVP_DecryptUpdate(evp, plaintext, &outlen, ciphertext, (int)ct_len) != 1)
+    goto cleanup;
+
+  /* Set the expected tag before finalization */
+  if (EVP_CIPHER_CTX_ctrl(evp, EVP_CTRL_GCM_SET_TAG, AEGIS_GCM_TAG_BYTES,
+                          (void *)tag) != 1)
+    goto cleanup;
+
+  /* Finalize — this verifies the authentication tag */
+  int final_len = 0;
+  if (EVP_DecryptFinal_ex(evp, plaintext + outlen, &final_len) != 1) {
+    AEGIS_ZERO(plaintext, ct_len);
+    result = AEGIS_ERR_AUTH;
+    goto cleanup;
+  }
+
+  result = AEGIS_OK;
+
+cleanup:
+  EVP_CIPHER_CTX_free(evp);
+  return result;
+}
+
 /* ── Decryption ──────────────────────────────────────────────────────────── */
 
 aegis_result_t aegis_decrypt(aegis_crypto_ctx_t *ctx, const uint8_t *ciphertext,
@@ -408,6 +465,9 @@ aegis_result_t aegis_decrypt(aegis_crypto_ctx_t *ctx, const uint8_t *ciphertext,
   }
 
   result = AEGIS_OK;
+
+  /* Auto-rekey if threshold reached */
+  maybe_rekey(ctx);
 
 cleanup:
   EVP_CIPHER_CTX_free(evp);

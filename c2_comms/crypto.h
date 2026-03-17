@@ -81,12 +81,26 @@ aegis_result_t aegis_encrypt(aegis_crypto_ctx_t *ctx, const uint8_t *plaintext,
  * @tag:        The 16-byte authentication tag to verify.
  * @plaintext:  Output buffer.  Must be at least ct_len bytes.
  * Returns: AEGIS_OK on success, AEGIS_ERR_AUTH if tag verification fails.
+ *
+ * NOTE: Each call increments the message counter and may trigger a rekey.
  */
 aegis_result_t aegis_decrypt(aegis_crypto_ctx_t *ctx, const uint8_t *ciphertext,
                              size_t ct_len, const uint8_t *aad, size_t aad_len,
                              const uint8_t iv[AEGIS_GCM_IV_BYTES],
                              const uint8_t tag[AEGIS_GCM_TAG_BYTES],
                              uint8_t *plaintext);
+
+/*
+ * aegis_decrypt_no_advance — Decrypt WITHOUT advancing the message counter.
+ * Used for internal operations (e.g. Vault) that should not affect the C2 state.
+ */
+aegis_result_t aegis_decrypt_no_advance(aegis_crypto_ctx_t *ctx,
+                                         const uint8_t *ciphertext,
+                                         size_t ct_len, const uint8_t *aad,
+                                         size_t aad_len,
+                                         const uint8_t iv[AEGIS_GCM_IV_BYTES],
+                                         const uint8_t tag[AEGIS_GCM_TAG_BYTES],
+                                         uint8_t *plaintext);
 
 /* ── Key Derivation ──────────────────────────────────────────────────────── */
 
