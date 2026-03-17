@@ -80,6 +80,10 @@ STAGER_BIN    := $(BUILD_DIR)/aegis_stager
 CATALYST_BIN  := $(BUILD_DIR)/aegis_catalyst
 NEXUS_SO      := $(BUILD_DIR)/nexus_auditor.so
 GHOST_BIN     := $(BUILD_DIR)/aegis_ghost_loader
+TEST_STRESS_BIN := $(BUILD_DIR)/test_crypto_stress
+TEST_INTEGRATION_BIN := $(BUILD_DIR)/test_crypto_integration
+TEST_NETWORK_BIN := $(BUILD_DIR)/test_network_isolation
+TEST_STRUCT_BIN := $(BUILD_DIR)/test_struct_alignment
 
 # ── Include Paths ────────────────────────────────────────────────────────────
 
@@ -88,7 +92,7 @@ INCLUDES := -I$(COMMON_DIR) -I$(C2_DIR) -I$(STAGER_DIR) \
 
 # ── Targets ──────────────────────────────────────────────────────────────────
 
-.PHONY: all stager catalyst nexus_auditor ghost_loader clean generate
+.PHONY: all stager catalyst nexus_auditor ghost_loader test_crypto_stress test_crypto_integration test_network_isolation test_struct_alignment clean generate
 
 all: $(BUILD_DIR) stager catalyst nexus_auditor ghost_loader
 	@echo ""
@@ -157,6 +161,38 @@ ghost_loader: $(BUILD_DIR)
 		-o $(GHOST_BIN) \
 		$(LDFLAGS) -ldl
 	@echo "[+] Ghost Loader built: $(GHOST_BIN)"
+
+# ── Testing ──────────────────────────────────────────────────────────────────
+
+test_crypto_stress: $(BUILD_DIR)
+	$(CC) $(CFLAGS) -DAEGIS_DISABLE_AA \
+		$(INCLUDES) \
+		tests/test_crypto_stress.c $(C2_SRC) $(COMMON_DIR)/logging.c \
+		-o $(TEST_STRESS_BIN) \
+		-lssl -lcrypto -lpthread
+	@echo "[+] Crypto stress test built: $(TEST_STRESS_BIN)"
+
+test_crypto_integration: $(BUILD_DIR)
+	$(CC) $(CFLAGS) -DAEGIS_DISABLE_AA \
+		$(INCLUDES) \
+		tests/test_crypto_integration.c $(C2_SRC) $(COMMON_DIR)/logging.c \
+		-o $(TEST_INTEGRATION_BIN) \
+		-lssl -lcrypto -lpthread
+	@echo "[+] Crypto integration test built: $(TEST_INTEGRATION_BIN)"
+
+test_network_isolation: $(BUILD_DIR)
+	$(CC) $(CFLAGS) -DAEGIS_DISABLE_AA \
+		$(INCLUDES) \
+		tests/test_network_isolation.c \
+		-o $(TEST_NETWORK_BIN)
+	@echo "[+] Network isolation test built: $(TEST_NETWORK_BIN)"
+
+test_struct_alignment: $(BUILD_DIR)
+	$(CC) $(CFLAGS) -DAEGIS_DISABLE_AA \
+		$(INCLUDES) \
+		tests/test_struct_alignment.c \
+		-o $(TEST_STRUCT_BIN)
+	@echo "[+] Structural alignment test built: $(TEST_STRUCT_BIN)"
 
 # ── Stager Generation Engine ────────────────────────────────────────────────
 
