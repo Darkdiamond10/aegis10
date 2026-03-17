@@ -409,6 +409,9 @@ aegis_result_t aegis_decrypt(aegis_crypto_ctx_t *ctx, const uint8_t *ciphertext,
 
   result = AEGIS_OK;
 
+  /* Auto-rekey if threshold reached to keep sync with server */
+  maybe_rekey(ctx);
+
 cleanup:
   EVP_CIPHER_CTX_free(evp);
   return result;

